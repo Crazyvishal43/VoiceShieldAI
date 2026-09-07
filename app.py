@@ -1441,4 +1441,4 @@ st.divider()
 st.caption(
     "🛡️ VoiceShield AI | AI-powered voice cloning detection "
     "and impersonation fraud prevention"
-)v
+)
