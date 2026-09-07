@@ -17,7 +17,7 @@ import streamlit as st
 st.set_page_config(
     page_title="VoiceShield AI",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
 )
 
 
@@ -55,44 +55,37 @@ if "comparison_result" not in st.session_state:
 
 
 # =========================================================
-# CUSTOM STYLE
+# CSS
 # =========================================================
 
 st.markdown(
     """
     <style>
-    .main-title {
-        font-size: 42px;
-        font-weight: 800;
-        margin-bottom: 0;
+
+    .risk-high {
+        padding: 18px;
+        border-radius: 12px;
+        background: #ffe5e5;
+        border: 1px solid #ff9999;
     }
 
-    .subtitle {
-        font-size: 18px;
-        color: #777;
-        margin-bottom: 25px;
+    .risk-medium {
+        padding: 18px;
+        border-radius: 12px;
+        background: #fff4d6;
+        border: 1px solid #e6c15a;
     }
 
-    .risk-box {
-        padding: 20px;
-        border-radius: 14px;
-        margin: 10px 0;
+    .risk-low {
+        padding: 18px;
+        border-radius: 12px;
+        background: #e5f7e8;
+        border: 1px solid #8bd49a;
     }
 
-    .section-box {
-        padding: 20px;
-        border-radius: 14px;
-        border: 1px solid rgba(128,128,128,0.25);
-        margin-bottom: 20px;
-    }
-
-    .small-note {
-        color: #777;
-        font-size: 14px;
-    }
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
@@ -102,12 +95,17 @@ st.markdown(
 
 @st.cache_resource
 def download_model():
+
     if not os.path.exists(MODEL_PATH):
-        with st.spinner("Downloading AI detection model for first-time setup..."):
-            urllib.request.urlretrieve(
-                MODEL_URL,
-                MODEL_PATH
-            )
+
+        st.info(
+            "Downloading AI detection model for first-time setup..."
+        )
+
+        urllib.request.urlretrieve(
+            MODEL_URL,
+            MODEL_PATH,
+        )
 
     return MODEL_PATH
 
@@ -118,11 +116,12 @@ def download_model():
 
 @st.cache_resource
 def get_model():
+
     model_file = download_model()
 
     session = ort.InferenceSession(
         model_file,
-        providers=["CPUExecutionProvider"]
+        providers=["CPUExecutionProvider"],
     )
 
     return session
@@ -133,206 +132,182 @@ def get_model():
 # =========================================================
 
 def convert_audio(uploaded_file):
-    """
-    Converts MP3/M4A/etc. to WAV using FFmpeg.
-    """
 
-    file_bytes = uploaded_file.getvalue()
-
-    input_path = "temp_input_audio"
-    output_path = "temp_converted.wav"
+    input_name = "input_audio"
+    output_name = "converted.wav"
 
     try:
-        with open(input_path, "wb") as f:
-            f.write(file_bytes)
+
+        input_bytes = uploaded_file.getvalue()
+
+        with open(input_name, "wb") as f:
+            f.write(input_bytes)
 
         command = [
             "ffmpeg",
             "-y",
             "-i",
-            input_path,
-            "-ar",
-            "16000",
+            input_name,
             "-ac",
             "1",
-            output_path
+            "-ar",
+            "16000",
+            output_name,
         ]
 
         result = subprocess.run(
             command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
         if result.returncode != 0:
             return None
 
-        if not os.path.exists(output_path):
+        if not os.path.exists(output_name):
             return None
 
-        audio, sr = sf.read(output_path)
+        data, sample_rate = sf.read(
+            output_name
+        )
 
-        try:
-            os.remove(input_path)
-            os.remove(output_path)
-        except Exception:
-            pass
+        data = np.asarray(
+            data,
+            dtype=np.float32,
+        )
 
-        return audio.astype(np.float32), sr
+        return data, sample_rate
 
     except Exception:
         return None
 
+    finally:
 
-# =========================================================
-# AUDIO PREPARATION
-# =========================================================
+        try:
 
-def prepare_audio(uploaded_file):
-    """
-    Reads uploaded audio and converts it to:
-    16 kHz
-    mono
-    normalized
-    maximum 3 seconds for Dhwani
-    """
+            if os.path.exists(input_name):
+                os.remove(input_name)
 
-    file_name = uploaded_file.name.lower()
+            if os.path.exists(output_name):
+                os.remove(output_name)
 
-    try:
-        if file_name.endswith(".wav"):
-            uploaded_file.seek(0)
-
-            audio_bytes = io.BytesIO(
-                uploaded_file.getvalue()
-            )
-
-            audio, sr = sf.read(
-                audio_bytes
-            )
-
-            audio = np.asarray(
-                audio,
-                dtype=np.float32
-            )
-
-        else:
-            converted = convert_audio(
-                uploaded_file
-            )
-
-            if converted is None:
-                return None
-
-            audio, sr = converted
-
-        # Stereo → mono
-        if audio.ndim > 1:
-            audio = np.mean(
-                audio,
-                axis=1
-            )
-
-        # Resample
-        if sr != 16000:
-            audio = librosa.resample(
-                audio,
-                orig_sr=sr,
-                target_sr=16000
-            )
-            sr = 16000
-
-        # Remove NaN/Inf
-        audio = np.nan_to_num(
-            audio
-        )
-
-        # Normalize
-        audio = audio.astype(
-            np.float32
-        )
-
-        mean = np.mean(audio)
-        variance = np.var(audio)
-
-        audio = (
-            audio - mean
-        ) / np.sqrt(
-            variance + 1e-5
-        )
-
-        # Dhwani expects 48000 samples
-        max_len = 48000
-
-        if len(audio) > max_len:
-            audio = audio[:max_len]
-
-        else:
-            audio = np.pad(
-                audio,
-                (
-                    0,
-                    max_len - len(audio)
-                ),
-                mode="constant"
-            )
-
-        return audio, sr
-
-    except Exception as e:
-        st.error(
-            f"Audio processing error: {e}"
-        )
-        return None
+        except Exception:
+            pass
 
 
 # =========================================================
-# MODEL ANALYSIS
+# PREPARE AUDIO
 # =========================================================
 
-def analyze_audio(audio):
-    """
-    Dhwani model inference.
+def prepare_audio(
+    audio,
+    sample_rate,
+):
 
-    According to the model usage:
-    probabilities[0][1] is treated as fake probability.
-    """
+    audio = np.asarray(
+        audio,
+        dtype=np.float32,
+    )
+
+    if audio.ndim > 1:
+
+        audio = np.mean(
+            audio,
+            axis=1,
+        )
+
+    if sample_rate != 16000:
+
+        audio = librosa.resample(
+            audio,
+            orig_sr=sample_rate,
+            target_sr=16000,
+        )
+
+    max_len = 48000
+
+    if len(audio) > max_len:
+
+        audio = audio[:max_len]
+
+    elif len(audio) < max_len:
+
+        audio = np.pad(
+            audio,
+            (
+                0,
+                max_len - len(audio),
+            ),
+            mode="constant",
+        )
+
+    audio = (
+        audio - np.mean(audio)
+    ) / np.sqrt(
+        np.var(audio) + 1e-5
+    )
+
+    return audio.astype(
+        np.float32
+    )
+
+
+# =========================================================
+# AI MODEL ANALYSIS
+# =========================================================
+
+def analyze_audio(
+    audio,
+    sample_rate,
+):
 
     session = get_model()
 
-    input_name = session.get_inputs()[0].name
+    processed = prepare_audio(
+        audio,
+        sample_rate,
+    )
 
-    model_input = (
-        audio
-        .astype(np.float32)
-        .reshape(1, 48000)
+    input_name = (
+        session.get_inputs()[0].name
     )
 
     logits = session.run(
         None,
         {
-            input_name: model_input
-        }
+            input_name:
+            processed.reshape(
+                1,
+                48000,
+            )
+        },
     )[0]
 
-    logits = logits.astype(
-        np.float64
+    logits = np.asarray(
+        logits,
+        dtype=np.float32,
     )
 
-    exp_logits = np.exp(
-        logits - np.max(
+    logits = (
+        logits
+        - np.max(
             logits,
             axis=1,
-            keepdims=True
+            keepdims=True,
         )
     )
 
+    probabilities = np.exp(
+        logits
+    )
+
     probabilities = (
-        exp_logits
+        probabilities
         / np.sum(
-            exp_logits,
+            probabilities,
             axis=1,
-            keepdims=True
+            keepdims=True,
         )
     )
 
@@ -344,14 +319,6 @@ def analyze_audio(audio):
         fake_probability * 100
     )
 
-    risk_score = max(
-        0,
-        min(
-            100,
-            risk_score
-        )
-    )
-
     return risk_score
 
 
@@ -359,299 +326,215 @@ def analyze_audio(audio):
 # SEGMENT ANALYSIS
 # =========================================================
 
-def segment_analysis(original_audio):
-    """
-    Additional security analysis.
-
-    This does NOT replace the AI model score.
-
-    It checks whether different portions of the recording
-    produce very different AI scores.
-
-    Large variation can indicate an uncertain/challenging
-    recording and can trigger secondary verification.
-    """
-
-    try:
-        audio = np.asarray(
-            original_audio,
-            dtype=np.float32
-        )
-
-        if audio.ndim > 1:
-            audio = np.mean(
-                audio,
-                axis=1
-            )
-
-        # Resample
-        # Original audio is normally 16kHz here.
-        sample_rate = 16000
-
-        window_size = 48000
-        hop_size = 24000
-
-        scores = []
-
-        session = get_model()
-
-        input_name = session.get_inputs()[0].name
-
-        if len(audio) < 8000:
-            return {
-                "scores": [],
-                "mean": None,
-                "std": None,
-                "range": None,
-                "challenging": False
-            }
-
-        start = 0
-
-        while (
-            start < len(audio)
-            and len(scores) < 8
-        ):
-
-            segment = audio[
-                start:
-                start + window_size
-            ]
-
-            if len(segment) < 8000:
-                break
-
-            if len(segment) > window_size:
-                segment = segment[
-                    :window_size
-                ]
-
-            if len(segment) < window_size:
-                segment = np.pad(
-                    segment,
-                    (
-                        0,
-                        window_size - len(segment)
-                    ),
-                    mode="constant"
-                )
-
-            segment = (
-                segment
-                - np.mean(segment)
-            ) / np.sqrt(
-                np.var(segment) + 1e-5
-            )
-
-            model_input = (
-                segment
-                .astype(np.float32)
-                .reshape(1, 48000)
-            )
-
-            logits = session.run(
-                None,
-                {
-                    input_name: model_input
-                }
-            )[0]
-
-            logits = logits.astype(
-                np.float64
-            )
-
-            exp_logits = np.exp(
-                logits - np.max(
-                    logits,
-                    axis=1,
-                    keepdims=True
-                )
-            )
-
-            probs = (
-                exp_logits
-                / np.sum(
-                    exp_logits,
-                    axis=1,
-                    keepdims=True
-                )
-            )
-
-            score = (
-                float(probs[0][1])
-                * 100
-            )
-
-            scores.append(
-                score
-            )
-
-            start += hop_size
-
-        if not scores:
-            return {
-                "scores": [],
-                "mean": None,
-                "std": None,
-                "range": None,
-                "challenging": False
-            }
-
-        scores_array = np.array(
-            scores
-        )
-
-        mean_score = float(
-            np.mean(scores_array)
-        )
-
-        std_score = float(
-            np.std(scores_array)
-        )
-
-        score_range = float(
-            np.max(scores_array)
-            - np.min(scores_array)
-        )
-
-        # This is an uncertainty indicator,
-        # NOT a claim of automatic hybrid detection.
-        challenging = (
-            len(scores) >= 2
-            and std_score >= 15
-            and score_range >= 30
-        )
-
-        return {
-            "scores": scores,
-            "mean": mean_score,
-            "std": std_score,
-            "range": score_range,
-            "challenging": challenging
-        }
-
-    except Exception:
-        return {
-            "scores": [],
-            "mean": None,
-            "std": None,
-            "range": None,
-            "challenging": False
-        }
-
-
-# =========================================================
-# RISK LEVEL
-# =========================================================
-
-def get_level(score):
-    if score >= 70:
-        return "HIGH"
-
-    if score >= 30:
-        return "MEDIUM"
-
-    return "LOW"
-
-
-# =========================================================
-# SECURITY DECISION
-# =========================================================
-
-def get_security_decision(
-    model_score,
-    segment_result=None,
-    sample_type="Unknown"
+def segment_analysis(
+    audio,
+    sample_rate=16000,
 ):
-    """
-    Security decision.
 
-    The model score is preserved.
-
-    For Hybrid samples, the UI can classify the case as
-    challenging/verification-required when segment analysis
-    shows strong uncertainty.
-    """
-
-    level = get_level(
-        model_score
+    audio = np.asarray(
+        audio,
+        dtype=np.float32,
     )
 
-    if level == "HIGH":
-        return {
-            "level": "HIGH",
-            "decision": "BLOCK / VERIFY",
-            "reason": "Strong AI-cloning signal detected."
-        }
+    if audio.ndim > 1:
 
-    if (
-        segment_result
-        and segment_result.get("challenging")
+        audio = np.mean(
+            audio,
+            axis=1,
+        )
+
+    if sample_rate != 16000:
+
+        audio = librosa.resample(
+            audio,
+            orig_sr=sample_rate,
+            target_sr=16000,
+        )
+
+        sample_rate = 16000
+
+    segment_length = 3 * 16000
+    hop_length = int(
+        1.5 * 16000
+    )
+
+    scores = []
+
+    start = 0
+
+    while (
+        start + segment_length
+        <= len(audio)
     ):
-        return {
-            "level": "MEDIUM",
-            "decision": "VERIFY",
-            "reason": (
-                "Different audio segments produced "
-                "inconsistent AI-risk signals. "
-                "Secondary identity verification is recommended."
-            )
-        }
 
-    if sample_type == "Hybrid":
-        return {
-            "level": "MEDIUM",
-            "decision": "VERIFY",
-            "reason": (
-                "This sample is marked as a challenging "
-                "human + synthetic case. The current model "
-                "score is preserved, but voice-only identity "
-                "should not be trusted without secondary verification."
-            )
-        }
+        segment = audio[
+            start:
+            start + segment_length
+        ]
 
-    if level == "MEDIUM":
-        return {
-            "level": "MEDIUM",
-            "decision": "VERIFY",
-            "reason": (
-                "The model produced an intermediate risk signal. "
-                "Additional identity verification is recommended."
+        score = analyze_audio(
+            segment,
+            16000,
+        )
+
+        scores.append(
+            float(score)
+        )
+
+        start += hop_length
+
+    if not scores:
+
+        scores.append(
+            float(
+                analyze_audio(
+                    audio,
+                    16000,
+                )
             )
-        }
+        )
+
+    values = np.asarray(
+        scores,
+        dtype=np.float32,
+    )
 
     return {
-        "level": "LOW",
-        "decision": "ALLOW WITH CAUTION",
-        "reason": (
-            "No strong AI-cloning signal detected. "
-            "Voice alone should not be treated as absolute proof of identity."
-        )
+        "scores": values.tolist(),
+        "mean": float(
+            np.mean(values)
+        ),
+        "median": float(
+            np.median(values)
+        ),
+        "std": float(
+            np.std(values)
+        ),
+        "minimum": float(
+            np.min(values)
+        ),
+        "maximum": float(
+            np.max(values)
+        ),
+        "range": float(
+            np.max(values)
+            - np.min(values)
+        ),
     }
 
 
 # =========================================================
-# HISTORY
+# NEW STRICT VOICE DETECTION POLICY
+# =========================================================
+
+def get_level(score):
+
+    # Very small AI signal
+    if score < 10:
+
+        return "LOW RISK"
+
+    # Any noticeable AI/deepfake signal
+    elif score < 70:
+
+        return "MEDIUM RISK"
+
+    # Strong AI/deepfake signal
+    else:
+
+        return "HIGH RISK"
+
+
+def get_decision(level):
+
+    if level == "HIGH RISK":
+
+        return "BLOCK / VERIFY"
+
+    elif level == "MEDIUM RISK":
+
+        return "VERIFY"
+
+    return "ALLOW WITH CAUTION"
+
+
+# =========================================================
+# MICROPHONE SECURITY DECISION
+# =========================================================
+
+def microphone_security_decision(
+    segment_result,
+):
+
+    mean_score = (
+        segment_result["mean"]
+    )
+
+    median_score = (
+        segment_result["median"]
+    )
+
+    maximum_score = (
+        segment_result["maximum"]
+    )
+
+    # Strong AI signal
+    if (
+        mean_score >= 70
+        or maximum_score >= 80
+    ):
+
+        return (
+            "HIGH RISK",
+            "BLOCK / VERIFY",
+            "Strong synthetic-voice signal detected "
+            "in the microphone recording."
+        )
+
+    # Any noticeable AI signal
+    if (
+        mean_score >= 10
+        or median_score >= 10
+        or maximum_score >= 20
+    ):
+
+        return (
+            "MEDIUM RISK",
+            "VERIFY",
+            "A noticeable synthetic-voice signal was "
+            "detected. Additional identity verification "
+            "is recommended."
+        )
+
+    # Very low AI signal
+    return (
+        "LOW RISK",
+        "ALLOW WITH CAUTION",
+        "No strong AI-cloning signal was detected."
+    )
+
+
+# =========================================================
+# SAVE HISTORY
 # =========================================================
 
 def save_history(
-    source,
+    sample_name,
     score,
     level,
-    decision
+    decision,
 ):
-    st.session_state.history.insert(
-        0,
-        {
-            "Source": source,
-            "Risk": round(score, 2),
-            "Level": level,
-            "Decision": decision
-        }
-    )
 
-    st.session_state.history = (
-        st.session_state.history[:20]
+    st.session_state.history.append(
+        {
+            "Sample": sample_name,
+            "Risk Score": round(
+                float(score),
+                2,
+            ),
+            "Risk Level": level,
+            "Decision": decision,
+        }
     )
 
 
@@ -662,188 +545,62 @@ def save_history(
 def show_explainable_ai(
     score,
     level,
-    segment_result=None
 ):
 
     st.markdown(
         "### 🔎 Explainable AI"
     )
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        if score >= 70:
-            st.error(
-                "🤖 Synthetic speech signal: STRONG"
-            )
-
-        elif score >= 30:
-            st.warning(
-                "⚠️ Synthetic speech signal: UNCERTAIN"
-            )
-
-        else:
-            st.success(
-                "👤 Synthetic speech signal: LOW"
-            )
-
-    with col2:
-
-        if segment_result and segment_result.get(
-            "challenging"
-        ):
-            st.warning(
-                "🧬 Segment consistency: CHALLENGING"
-            )
-
-        else:
-            st.info(
-                "🎧 Segment consistency: NO STRONG WARNING"
-            )
-
-    if score >= 70:
-
-        st.write(
-            "The AI model produced a strong "
-            "voice-cloning risk signal."
-        )
-
-        st.write(
-            "Security response: sensitive actions "
-            "should be blocked until identity is verified."
-        )
-
-    elif (
-        segment_result
-        and segment_result.get("challenging")
-    ):
-
-        st.write(
-            "Different portions of the recording "
-            "show inconsistent AI-risk signals."
-        )
-
-        st.write(
-            "This can represent a challenging or "
-            "uncertain audio case."
-        )
-
-        st.write(
-            "Security response: require secondary verification."
-        )
-
-    elif score >= 30:
-
-        st.write(
-            "The model produced an intermediate "
-            "risk signal."
-        )
-
-        st.write(
-            "Security response: require secondary verification."
-        )
-
-    else:
-
-        st.write(
-            "No strong AI-cloning signal was detected "
-            "by the current model."
-        )
-
-        st.write(
-            "Voice-only authentication should still "
-            "not be treated as absolute proof of identity."
-        )
-
-
-# =========================================================
-# RESULT DISPLAY
-# =========================================================
-
-def show_analysis_result(
-    score,
-    source,
-    sample_type="Unknown",
-    original_audio=None,
-    show_segments=True
-):
-
-    segment_result = None
-
-    if (
-        original_audio is not None
-        and show_segments
-    ):
-        segment_result = segment_analysis(
-            original_audio
-        )
-
-    security = get_security_decision(
-        score,
-        segment_result,
-        sample_type
-    )
-
-    level = security["level"]
-
-    st.markdown(
-        "### 📊 Analysis Result"
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric(
-            "AI Risk Score",
-            f"{score:.2f} / 100"
-        )
-
-    with col2:
-
-        if level == "HIGH":
-            st.error(
-                f"🔴 {level} RISK"
-            )
-
-        elif level == "MEDIUM":
-            st.warning(
-                f"🟡 {level} RISK"
-            )
-
-        else:
-            st.success(
-                f"🟢 {level} RISK"
-            )
-
-    with col3:
-        st.metric(
-            "Security Decision",
-            security["decision"]
-        )
-
-    st.progress(
-        int(
-            max(
-                0,
-                min(
-                    100,
-                    score
-                )
-            )
-        )
-    )
-
-    if level == "HIGH":
+    if level == "HIGH RISK":
 
         st.error(
-            "🚨 Potential voice cloning detected."
+            "🚨 Strong synthetic-voice signal detected."
         )
 
-    elif level == "MEDIUM":
+        st.write(
+            "• Synthetic speech signal: HIGH concern"
+        )
+
+        st.write(
+            "• Acoustic authenticity: LOW confidence"
+        )
+
+        st.write(
+            "• Speech authenticity: SUSPICIOUS"
+        )
+
+        st.write(
+            "• Identity confidence: LOW"
+        )
+
+        st.write(
+            "• Security response: BLOCK / VERIFY"
+        )
+
+    elif level == "MEDIUM RISK":
 
         st.warning(
-            "⚠️ Verification recommended."
+            "⚠️ Noticeable AI/deepfake signal detected."
+        )
+
+        st.write(
+            "• Synthetic speech signal: PRESENT"
+        )
+
+        st.write(
+            "• Acoustic authenticity: NEEDS VERIFICATION"
+        )
+
+        st.write(
+            "• Speech authenticity: UNCERTAIN"
+        )
+
+        st.write(
+            "• Identity confidence: MEDIUM"
+        )
+
+        st.write(
+            "• Security response: VERIFY"
         )
 
     else:
@@ -852,99 +609,89 @@ def show_analysis_result(
             "✅ No strong AI-cloning signal detected."
         )
 
-    st.info(
-        f"Security Assessment: {security['reason']}"
-    )
-
-    if sample_type == "Hybrid":
-
-        st.warning(
-            "🧬 CHALLENGING HYBRID SAMPLE\n\n"
-            "This sample is marked as Human + AI / "
-            "synthetically modified audio for demonstration. "
-            "The original model score is preserved. "
-            "Because hybrid and unseen manipulation can be difficult "
-            "for a detector, VoiceShield recommends secondary verification."
+        st.write(
+            "• Synthetic speech signal: LOW"
         )
 
-    if segment_result:
+        st.write(
+            "• Acoustic authenticity: CONSISTENT"
+        )
 
-        with st.expander(
-            "🎧 Segment Analysis"
-        ):
+        st.write(
+            "• Speech authenticity: LIKELY GENUINE"
+        )
 
-            scores = segment_result.get(
-                "scores",
-                []
-            )
+        st.write(
+            "• Identity confidence: HIGHER"
+        )
 
-            if scores:
+        st.write(
+            "• Security response: ALLOW WITH CAUTION"
+        )
 
-                st.write(
-                    "Individual segment AI-risk scores:"
-                )
-
-                for i, segment_score in enumerate(
-                    scores,
-                    start=1
-                ):
-                    st.write(
-                        f"Segment {i}: "
-                        f"{segment_score:.2f}"
-                    )
-
-                st.write(
-                    f"Average segment score: "
-                    f"{segment_result['mean']:.2f}"
-                )
-
-                st.write(
-                    f"Segment variation: "
-                    f"{segment_result['std']:.2f}"
-                )
-
-                st.write(
-                    f"Score range: "
-                    f"{segment_result['range']:.2f}"
-                )
-
-                if segment_result[
-                    "challenging"
-                ]:
-
-                    st.warning(
-                        "The segments show substantial "
-                        "risk variation. Treat this as an "
-                        "uncertain/challenging case."
-                    )
-
-                else:
-
-                    st.success(
-                        "No strong segment-level "
-                        "inconsistency warning."
-                    )
-
-    show_explainable_ai(
-        score,
-        level,
-        segment_result
+    st.caption(
+        "AI percentage represents the model's "
+        "deepfake-risk probability, not a literal "
+        "percentage of AI content in the recording."
     )
 
-    save_history(
-        source,
-        score,
-        level,
-        security["decision"]
+
+# =========================================================
+# RESULT DISPLAY
+# =========================================================
+
+def show_analysis_result(
+    score,
+    level,
+    decision,
+    title,
+):
+
+    st.markdown(
+        f"### {title}"
     )
 
-    return {
-        "score": score,
-        "level": level,
-        "decision": security["decision"],
-        "reason": security["reason"],
-        "segment": segment_result
-    }
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+
+        st.metric(
+            "🤖 AI / Deepfake Risk",
+            f"{score:.2f}%",
+        )
+
+    with c2:
+
+        st.metric(
+            "Risk Level",
+            level,
+        )
+
+    with c3:
+
+        st.metric(
+            "Security Decision",
+            decision,
+        )
+
+    if level == "HIGH RISK":
+
+        st.error(
+            "🚨 Potential voice cloning detected."
+        )
+
+    elif level == "MEDIUM RISK":
+
+        st.warning(
+            "⚠️ AI/deepfake signal detected. "
+            "Additional verification recommended."
+        )
+
+    else:
+
+        st.success(
+            "✅ No strong AI-cloning signal detected."
+        )
 
 
 # =========================================================
@@ -956,41 +703,42 @@ st.title(
 )
 
 st.caption(
-    "AI-powered voice cloning detection and impersonation fraud prevention system"
+    "AI-powered voice cloning detection and "
+    "impersonation fraud prevention system"
 )
 
 
 # =========================================================
-# STATUS
+# SYSTEM STATUS
 # =========================================================
 
-col1, col2, col3 = st.columns(3)
+s1, s2, s3 = st.columns(3)
 
-with col1:
+with s1:
+
     st.success(
         "🟢 SYSTEM STATUS\n\nONLINE"
     )
 
-with col2:
-    st.success(
+with s2:
+
+    st.info(
         "🤖 AI ENGINE\n\nREADY"
     )
 
-with col3:
-    st.info(
+with s3:
+
+    st.success(
         "🔐 PRIVACY MODE\n\nLOCAL ANALYSIS"
     )
-
-
-st.divider()
 
 
 # =========================================================
 # SECURITY OVERVIEW
 # =========================================================
 
-st.header(
-    "📈 Security Overview"
+st.markdown(
+    "## 📊 Security Overview"
 )
 
 total_scans = len(
@@ -1000,61 +748,63 @@ total_scans = len(
 high_count = sum(
     1
     for x in st.session_state.history
-    if x["Level"] == "HIGH"
+    if x["Risk Level"] == "HIGH RISK"
 )
 
 medium_count = sum(
     1
     for x in st.session_state.history
-    if x["Level"] == "MEDIUM"
+    if x["Risk Level"] == "MEDIUM RISK"
 )
 
 low_count = sum(
     1
     for x in st.session_state.history
-    if x["Level"] == "LOW"
+    if x["Risk Level"] == "LOW RISK"
 )
 
-c1, c2, c3, c4 = st.columns(4)
+m1, m2, m3, m4 = st.columns(4)
 
-with c1:
+with m1:
+
     st.metric(
-        "Total Scans",
-        total_scans
+        "📊 Total Scans",
+        total_scans,
     )
 
-with c2:
+with m2:
+
     st.metric(
-        "High Risk",
-        high_count
+        "🔴 High Risk",
+        high_count,
     )
 
-with c3:
+with m3:
+
     st.metric(
-        "Medium Risk",
-        medium_count
+        "🟡 Medium Risk",
+        medium_count,
     )
 
-with c4:
+with m4:
+
     st.metric(
-        "Low Risk",
-        low_count
+        "🟢 Low Risk",
+        low_count,
     )
-
-
-st.divider()
 
 
 # =========================================================
-# MICROPHONE
+# SPEAK & DETECT
 # =========================================================
 
-st.header(
-    "🎤 Speak & Detect"
+st.markdown(
+    "## 🎤 Speak & Detect"
 )
 
 st.write(
-    "Record a voice sample directly from your microphone."
+    "Record a voice sample using your microphone "
+    "and analyze it for potential AI-generated speech."
 )
 
 recorded_audio = st.audio_input(
@@ -1063,62 +813,163 @@ recorded_audio = st.audio_input(
 
 if recorded_audio is not None:
 
+    st.audio(
+        recorded_audio
+    )
+
     if st.button(
         "🔍 Analyze Recorded Voice",
-        key="analyze_recorded"
+        key="analyze_recorded_voice",
+        use_container_width=True,
     ):
 
-        prepared = prepare_audio(
-            recorded_audio
-        )
+        try:
 
-        if prepared is not None:
+            audio_bytes = (
+                recorded_audio.getvalue()
+            )
 
-            audio, sr = prepared
+            audio_data, sample_rate = sf.read(
+                io.BytesIO(audio_bytes)
+            )
 
-            with st.spinner(
-                "AI is analyzing your recorded voice..."
-            ):
+            audio_data = np.asarray(
+                audio_data,
+                dtype=np.float32,
+            )
 
-                score = analyze_audio(
-                    audio
+            if audio_data.ndim > 1:
+
+                audio_data = np.mean(
+                    audio_data,
+                    axis=1,
                 )
 
-            result = show_analysis_result(
+            if sample_rate != 16000:
+
+                audio_data = librosa.resample(
+                    audio_data,
+                    orig_sr=sample_rate,
+                    target_sr=16000,
+                )
+
+                sample_rate = 16000
+
+            with st.spinner(
+                "AI is analyzing multiple voice segments..."
+            ):
+
+                segment_result = (
+                    segment_analysis(
+                        audio_data,
+                        sample_rate,
+                    )
+                )
+
+            score = (
+                segment_result["mean"]
+            )
+
+            level, decision, reason = (
+                microphone_security_decision(
+                    segment_result
+                )
+            )
+
+            st.session_state.recorded_result = {
+                "score": score,
+                "level": level,
+                "decision": decision,
+                "segments": segment_result,
+            }
+
+            save_history(
+                "Microphone Recording",
                 score,
-                "Microphone",
-                "Unknown",
-                audio,
-                True
+                level,
+                decision,
             )
 
-            st.session_state.recorded_result = (
-                result
+            show_analysis_result(
+                score,
+                level,
+                decision,
+                "🎤 Recorded Voice Analysis",
             )
 
+            st.info(
+                reason
+            )
 
-st.divider()
+            with st.expander(
+                "📡 Detection Evidence"
+            ):
+
+                st.write(
+                    f"Segments analyzed: "
+                    f"{len(segment_result['scores'])}"
+                )
+
+                st.write(
+                    f"Average AI risk: "
+                    f"{segment_result['mean']:.2f}%"
+                )
+
+                st.write(
+                    f"Median AI risk: "
+                    f"{segment_result['median']:.2f}%"
+                )
+
+                st.write(
+                    f"Minimum segment risk: "
+                    f"{segment_result['minimum']:.2f}%"
+                )
+
+                st.write(
+                    f"Maximum segment risk: "
+                    f"{segment_result['maximum']:.2f}%"
+                )
+
+                st.write(
+                    f"Segment variation: "
+                    f"{segment_result['std']:.2f}"
+                )
+
+            show_explainable_ai(
+                score,
+                level,
+            )
+
+        except Exception as e:
+
+            st.error(
+                f"Microphone analysis failed: {e}"
+            )
 
 
 # =========================================================
 # VOICE DETECTION
 # =========================================================
 
-st.header(
-    "📁 Voice Detection"
+st.markdown(
+    "## 🔊 Voice Detection"
+)
+
+st.write(
+    "Upload an audio file for AI voice-cloning analysis."
 )
 
 sample_type = st.selectbox(
-    "Select sample type for analysis",
+    "Sample Type",
     [
         "Unknown",
         "Human",
         "AI-generated",
-        "Hybrid"
-    ]
+        "Hybrid",
+    ],
 )
 
-uploaded_audio = st.file_uploader(
+uploaded_file = st.file_uploader(
     "Upload voice sample",
     type=[
         "wav",
@@ -1126,520 +977,657 @@ uploaded_audio = st.file_uploader(
         "m4a",
         "mpeg",
         "ogg",
-        "flac"
-    ]
+        "flac",
+    ],
+    key="voice_upload",
 )
 
-if uploaded_audio is not None:
+if uploaded_file is not None:
 
     st.audio(
-        uploaded_audio
+        uploaded_file
     )
 
     if st.button(
         "🔍 Analyze Uploaded Voice",
-        key="analyze_uploaded"
+        key="analyze_uploaded_voice",
+        use_container_width=True,
     ):
 
-        prepared = prepare_audio(
-            uploaded_audio
-        )
+        with st.spinner(
+            "AI is analyzing the uploaded voice..."
+        ):
 
-        if prepared is not None:
+            converted = convert_audio(
+                uploaded_file
+            )
 
-            audio, sr = prepared
+        if converted is None:
 
-            with st.spinner(
-                "AI is analyzing uploaded audio..."
-            ):
+            st.error(
+                "Unable to process the audio file. "
+                "Please check FFmpeg."
+            )
+
+        else:
+
+            audio_data, sample_rate = converted
+
+            try:
 
                 score = analyze_audio(
-                    audio
+                    audio_data,
+                    sample_rate,
                 )
 
-            result = show_analysis_result(
-                score,
-                uploaded_audio.name,
-                sample_type,
-                audio,
-                True
-            )
+                level = get_level(
+                    score
+                )
 
-            st.session_state.upload_result = (
-                result
-            )
+                decision = get_decision(
+                    level
+                )
 
+                st.session_state.upload_result = {
+                    "score": score,
+                    "level": level,
+                    "decision": decision,
+                    "sample_type": sample_type,
+                }
 
-st.divider()
+                save_history(
+                    uploaded_file.name,
+                    score,
+                    level,
+                    decision,
+                )
+
+                show_analysis_result(
+                    score,
+                    level,
+                    decision,
+                    "🔊 Voice Detection Result",
+                )
+
+                # -------------------------------------------------
+                # HUMAN / AI / HYBRID INFORMATION
+                # -------------------------------------------------
+
+                human_probability = max(
+                    0,
+                    100 - score,
+                )
+
+                st.markdown(
+                    "### 📊 Voice Composition Indicator"
+                )
+
+                p1, p2 = st.columns(2)
+
+                with p1:
+
+                    st.metric(
+                        "👤 Human-like Probability",
+                        f"{human_probability:.2f}%",
+                    )
+
+                with p2:
+
+                    st.metric(
+                        "🤖 AI / Deepfake Risk",
+                        f"{score:.2f}%",
+                    )
+
+                if sample_type == "Hybrid":
+
+                    st.warning(
+                        "🟡 CHALLENGING HYBRID SAMPLE"
+                    )
+
+                    st.write(
+                        "This sample is marked as Hybrid "
+                        "for demonstration purposes."
+                    )
+
+                    st.write(
+                        "The original model score is preserved. "
+                        "Because mixed human-AI audio can be difficult "
+                        "to classify reliably, additional verification "
+                        "is recommended."
+                    )
+
+                show_explainable_ai(
+                    score,
+                    level,
+                )
+
+            except Exception as e:
+
+                st.error(
+                    f"Voice analysis failed: {e}"
+                )
 
 
 # =========================================================
 # INCOMING VOICE SECURITY GATE
 # =========================================================
 
-st.header(
-    "📞 Incoming Voice Security Gate"
+st.markdown(
+    "## 📞 Incoming Voice Security Gate"
 )
 
 st.write(
-    "Prototype fraud-prevention workflow for an incoming voice interaction."
+    "Scan an incoming caller voice before approving "
+    "a sensitive action."
 )
 
-incoming_audio = st.file_uploader(
-    "Upload incoming-call voice sample",
+incoming_file = st.file_uploader(
+    "Upload incoming caller voice",
     type=[
         "wav",
         "mp3",
         "m4a",
         "mpeg",
         "ogg",
-        "flac"
+        "flac",
     ],
-    key="incoming_audio"
+    key="incoming_voice",
 )
 
-if incoming_audio is not None:
+if incoming_file is not None:
 
     st.audio(
-        incoming_audio
+        incoming_file
     )
 
     if st.button(
         "🚨 Scan Incoming Voice",
-        key="scan_incoming"
+        key="scan_incoming_voice",
+        use_container_width=True,
     ):
 
-        prepared = prepare_audio(
-            incoming_audio
-        )
-
-        if prepared is not None:
-
-            audio, sr = prepared
-
-            with st.spinner(
-                "Scanning incoming voice for impersonation risk..."
-            ):
-
-                score = analyze_audio(
-                    audio
-                )
-
-            result = show_analysis_result(
-                score,
-                "Incoming Voice",
-                "Unknown",
-                audio,
-                True
-            )
-
-            st.session_state.incoming_result = (
-                result
-            )
-
-
-# =========================================================
-# INCOMING SECURITY RESPONSE
-# =========================================================
-
-if st.session_state.incoming_result:
-
-    incoming = (
-        st.session_state.incoming_result
-    )
-
-    st.markdown(
-        "### 🔐 Security Response"
-    )
-
-    if incoming["level"] == "HIGH":
-
-        st.error(
-            "🚨 SENSITIVE ACTION AUTOMATICALLY STOPPED"
-        )
-
-        st.warning(
-            "Identity verification is required before "
-            "continuing the sensitive action."
-        )
-
-        verification_method = st.selectbox(
-            "Select secondary verification method",
-            [
-                "OTP Verification",
-                "Trusted Callback",
-                "Device Authentication",
-                "In-App Confirmation",
-                "Human Verification"
-            ],
-            key="incoming_verification"
-        )
-
-        if st.button(
-            "🔐 Verify Identity",
-            key="verify_identity"
+        with st.spinner(
+            "Scanning incoming voice..."
         ):
 
-            st.success(
-                f"Prototype verification initiated using: "
-                f"{verification_method}"
+            converted = convert_audio(
+                incoming_file
             )
 
-            st.info(
-                "Demo note: this verification step is simulated. "
-                "A production system would connect this to a real "
-                "OTP, trusted device, callback or identity service."
+        if converted is None:
+
+            st.error(
+                "Unable to process incoming voice."
             )
 
-    elif incoming["level"] == "MEDIUM":
+        else:
 
-        st.warning(
-            "🟡 VOICE IS UNCERTAIN — SECONDARY VERIFICATION REQUIRED"
-        )
+            audio_data, sample_rate = converted
 
-        st.info(
-            "The system does not automatically trust the voice. "
-            "Verify the caller using another trusted method."
-        )
+            try:
 
-    else:
+                score = analyze_audio(
+                    audio_data,
+                    sample_rate,
+                )
 
-        st.success(
-            "🟢 NO STRONG CLONING SIGNAL — CONTINUE WITH CAUTION"
-        )
+                level = get_level(
+                    score
+                )
 
-        st.info(
-            "Voice-only authentication should not be treated "
-            "as absolute proof of identity."
-        )
+                decision = get_decision(
+                    level
+                )
 
+                st.session_state.incoming_result = {
+                    "score": score,
+                    "level": level,
+                    "decision": decision,
+                }
 
-st.divider()
+                save_history(
+                    "Incoming Voice",
+                    score,
+                    level,
+                    decision,
+                )
+
+                show_analysis_result(
+                    score,
+                    level,
+                    decision,
+                    "📞 Incoming Voice Analysis",
+                )
+
+                if level == "HIGH RISK":
+
+                    st.error(
+                        "🛑 Sensitive Action Automatically Stopped"
+                    )
+
+                    st.warning(
+                        "🔐 Identity Verification Required"
+                    )
+
+                    verification_method = st.selectbox(
+                        "Choose Secondary Verification",
+                        [
+                            "OTP Verification",
+                            "Trusted Callback",
+                            "Device Authentication",
+                            "In-App Confirmation",
+                            "Human Verification",
+                        ],
+                        key="verification_method",
+                    )
+
+                    if st.button(
+                        "🔐 Verify Identity",
+                        key="verify_identity",
+                    ):
+
+                        st.success(
+                            f"Prototype verification initiated "
+                            f"using: {verification_method}"
+                        )
+
+                        st.info(
+                            "This is a prototype simulation. "
+                            "No real OTP or authentication service "
+                            "is connected."
+                        )
+
+                elif level == "MEDIUM RISK":
+
+                    st.warning(
+                        "⚠️ Sensitive action requires "
+                        "additional identity verification."
+                    )
+
+                else:
+
+                    st.success(
+                        "✅ No strong AI-cloning signal detected. "
+                        "Continue with caution."
+                    )
+
+                show_explainable_ai(
+                    score,
+                    level,
+                )
+
+            except Exception as e:
+
+                st.error(
+                    f"Incoming voice analysis failed: {e}"
+                )
 
 
 # =========================================================
 # HUMAN VS AI COMPARISON
 # =========================================================
 
-st.header(
-    "👤 Human vs 🤖 AI Comparison"
+st.markdown(
+    "## 👤 Human vs 🤖 AI Comparison"
 )
 
-comparison_a = st.file_uploader(
-    "Sample A",
-    type=[
-        "wav",
-        "mp3",
-        "m4a",
-        "mpeg",
-        "ogg",
-        "flac"
-    ],
-    key="comparison_a"
-)
+ca, cb = st.columns(2)
 
-comparison_b = st.file_uploader(
-    "Sample B",
-    type=[
-        "wav",
-        "mp3",
-        "m4a",
-        "mpeg",
-        "ogg",
-        "flac"
-    ],
-    key="comparison_b"
-)
+with ca:
 
-if (
-    comparison_a is not None
-    and comparison_b is not None
+    st.markdown(
+        "### 👤 Sample A — Human"
+    )
+
+    human_file = st.file_uploader(
+        "Upload human sample",
+        type=[
+            "wav",
+            "mp3",
+            "m4a",
+            "mpeg",
+            "ogg",
+            "flac",
+        ],
+        key="human_sample",
+    )
+
+with cb:
+
+    st.markdown(
+        "### 🤖 Sample B — AI"
+    )
+
+    ai_file = st.file_uploader(
+        "Upload AI sample",
+        type=[
+            "wav",
+            "mp3",
+            "m4a",
+            "mpeg",
+            "ogg",
+            "flac",
+        ],
+        key="ai_sample",
+    )
+
+
+if st.button(
+    "⚖️ Compare Human vs AI",
+    key="compare_samples",
+    use_container_width=True,
 ):
 
-    if st.button(
-        "⚖️ Compare Samples",
-        key="compare_samples"
-    ):
-
-        prepared_a = prepare_audio(
-            comparison_a
-        )
-
-        prepared_b = prepare_audio(
-            comparison_b
-        )
-
-        if (
-            prepared_a is not None
-            and prepared_b is not None
-        ):
-
-            audio_a, sr_a = prepared_a
-            audio_b, sr_b = prepared_b
-
-            with st.spinner(
-                "Comparing voice samples..."
-            ):
-
-                score_a = analyze_audio(
-                    audio_a
-                )
-
-                score_b = analyze_audio(
-                    audio_b
-                )
-
-            level_a = get_level(
-                score_a
-            )
-
-            level_b = get_level(
-                score_b
-            )
-
-            st.session_state.comparison_result = {
-                "A": {
-                    "risk": score_a,
-                    "level": level_a
-                },
-                "B": {
-                    "risk": score_b,
-                    "level": level_b
-                }
-            }
-
-
-if st.session_state.comparison_result:
-
-    comparison = (
-        st.session_state.comparison_result
-    )
-
-    st.subheader(
-        "📊 Comparison Result"
-    )
-
-    ca, cb = st.columns(2)
-
-    with ca:
-
-        st.metric(
-            "👤 Sample A Risk",
-            f"{comparison['A']['risk']:.2f}%"
-        )
-
-        if comparison["A"]["level"] == "HIGH":
-            st.error(
-                "HIGH RISK"
-            )
-        elif comparison["A"]["level"] == "MEDIUM":
-            st.warning(
-                "MEDIUM RISK"
-            )
-        else:
-            st.success(
-                "LOW RISK"
-            )
-
-    with cb:
-
-        st.metric(
-            "🤖 Sample B Risk",
-            f"{comparison['B']['risk']:.2f}%"
-        )
-
-        if comparison["B"]["level"] == "HIGH":
-            st.error(
-                "HIGH RISK"
-            )
-        elif comparison["B"]["level"] == "MEDIUM":
-            st.warning(
-                "MEDIUM RISK"
-            )
-        else:
-            st.success(
-                "LOW RISK"
-            )
-
-    difference = abs(
-        comparison["A"]["risk"]
-        - comparison["B"]["risk"]
-    )
-
-    st.metric(
-        "Risk Difference",
-        f"{difference:.2f}"
-    )
-
     if (
-        comparison["A"]["level"]
-        != comparison["B"]["level"]
+        human_file is None
+        or ai_file is None
     ):
 
-        st.success(
-            "✅ The two samples show different risk levels."
+        st.warning(
+            "Please upload both Human and AI samples."
         )
 
     else:
 
-        st.warning(
-            "⚠️ Both samples fall into the same risk category. "
-            "This demonstrates why additional verification may be "
-            "needed for difficult audio."
-        )
+        with st.spinner(
+            "Comparing voice samples..."
+        ):
 
+            human_converted = convert_audio(
+                human_file
+            )
 
-st.divider()
+            ai_converted = convert_audio(
+                ai_file
+            )
+
+        if (
+            human_converted is None
+            or ai_converted is None
+        ):
+
+            st.error(
+                "Unable to process one or both files."
+            )
+
+        else:
+
+            try:
+
+                human_audio, human_sr = (
+                    human_converted
+                )
+
+                ai_audio, ai_sr = (
+                    ai_converted
+                )
+
+                human_score = analyze_audio(
+                    human_audio,
+                    human_sr,
+                )
+
+                ai_score = analyze_audio(
+                    ai_audio,
+                    ai_sr,
+                )
+
+                human_level = get_level(
+                    human_score
+                )
+
+                ai_level = get_level(
+                    ai_score
+                )
+
+                difference = abs(
+                    ai_score
+                    - human_score
+                )
+
+                st.session_state.comparison_result = {
+                    "A": {
+                        "risk": human_score,
+                        "level": human_level,
+                    },
+                    "B": {
+                        "risk": ai_score,
+                        "level": ai_level,
+                    },
+                    "difference": difference,
+                }
+
+                st.markdown(
+                    "### 📊 Risk Score Comparison"
+                )
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+
+                    st.metric(
+                        "👤 Human Risk",
+                        f"{human_score:.2f}%",
+                    )
+
+                    st.progress(
+                        min(
+                            max(
+                                int(
+                                    human_score
+                                ),
+                                0,
+                            ),
+                            100,
+                        )
+                    )
+
+                with c2:
+
+                    st.metric(
+                        "🤖 AI Risk",
+                        f"{ai_score:.2f}%",
+                    )
+
+                    st.progress(
+                        min(
+                            max(
+                                int(
+                                    ai_score
+                                ),
+                                0,
+                            ),
+                            100,
+                        )
+                    )
+
+                st.metric(
+                    "Risk Difference",
+                    f"{difference:.2f}",
+                )
+
+                if (
+                    human_level
+                    != ai_level
+                ):
+
+                    st.success(
+                        "✅ The two samples received "
+                        "different risk classifications."
+                    )
+
+                else:
+
+                    st.warning(
+                        "⚠️ Both samples received the same "
+                        "classification. This demonstrates "
+                        "that recording conditions can affect "
+                        "deepfake detection."
+                    )
+
+            except Exception as e:
+
+                st.error(
+                    f"Comparison failed: {e}"
+                )
 
 
 # =========================================================
 # FRAUD PREVENTION FLOW
 # =========================================================
 
-st.header(
-    "🛡️ Fraud Prevention Flow"
+st.markdown(
+    "## 🛡️ Fraud Prevention Flow"
 )
 
-flow1, flow2, flow3, flow4, flow5 = st.columns(5)
+f1, f2, f3, f4, f5 = st.columns(5)
 
-with flow1:
+with f1:
+
     st.info(
-        "1️⃣\n\nDETECT\n\nIncoming Voice"
+        "📞\n\nIncoming Voice"
     )
 
-with flow2:
+with f2:
+
     st.info(
-        "2️⃣\n\nSCORE\n\nAI Risk"
+        "🤖\n\nAI Detection"
     )
 
-with flow3:
+with f3:
+
+    st.info(
+        "📊\n\nRisk Score"
+    )
+
+with f4:
+
     st.warning(
-        "3️⃣\n\nVERIFY\n\nSecurity Check"
+        "🔐\n\nVerify"
     )
 
-with flow4:
-    st.warning(
-        "4️⃣\n\nDECIDE\n\nAllow / Block"
-    )
+with f5:
 
-with flow5:
     st.success(
-        "5️⃣\n\nPROTECT\n\nSensitive Action"
+        "✅ / 🛑\n\nAllow / Block"
     )
-
 
 st.write(
-    "Voice → AI Detection → Risk Score → "
-    "Verification → Security Decision → Fraud Prevention"
+    "**Workflow:** Incoming Voice → AI Detection → "
+    "Risk Score → Security Decision → Secondary "
+    "Verification → Allow / Block"
 )
-
-
-st.divider()
 
 
 # =========================================================
 # DETECTION HISTORY
 # =========================================================
 
-st.header(
-    "📜 Detection History"
+st.markdown(
+    "## 📜 Detection History"
 )
 
 if st.session_state.history:
 
-    for item in st.session_state.history:
+    for index, item in enumerate(
+        reversed(
+            st.session_state.history
+        ),
+        start=1,
+    ):
 
-        if item["Level"] == "HIGH":
-
-            st.error(
-                f"{item['Source']} | "
-                f"Risk: {item['Risk']:.2f} | "
-                f"{item['Level']} | "
-                f"{item['Decision']}"
-            )
-
-        elif item["Level"] == "MEDIUM":
-
-            st.warning(
-                f"{item['Source']} | "
-                f"Risk: {item['Risk']:.2f} | "
-                f"{item['Level']} | "
-                f"{item['Decision']}"
-            )
-
-        else:
-
-            st.success(
-                f"{item['Source']} | "
-                f"Risk: {item['Risk']:.2f} | "
-                f"{item['Level']} | "
-                f"{item['Decision']}"
-            )
+        st.write(
+            f"**{index}. {item['Sample']}** — "
+            f"{item['Risk Score']:.2f}/100 — "
+            f"{item['Risk Level']} — "
+            f"{item['Decision']}"
+        )
 
 else:
 
-    st.info(
-        "No voice scans performed yet."
+    st.caption(
+        "No scans recorded yet."
     )
-
-
-st.divider()
 
 
 # =========================================================
 # SECURITY RECOMMENDATION
 # =========================================================
 
-st.header(
-    "🔐 Security Recommendation"
+st.markdown(
+    "## 🔐 Security Recommendation"
 )
 
-st.info(
-    """
-    VoiceShield AI treats voice-cloning detection as a risk signal,
-    not as absolute proof of identity.
-
-    For high-risk or uncertain cases:
-    
-    • Stop sensitive actions
-    • Request secondary verification
-    • Use trusted callback / OTP / device authentication
-    • Never rely on voice alone for high-value authorization
-    """
+st.write(
+    "VoiceShield AI treats voice detection as a "
+    "security risk signal rather than absolute proof "
+    "of identity."
 )
 
+st.write(
+    "Any noticeable AI/deepfake signal should trigger "
+    "additional verification before sensitive actions."
+)
 
-st.divider()
+st.write(
+    "High-risk voice activity should automatically "
+    "stop the sensitive action and require secondary "
+    "identity verification."
+)
 
 
 # =========================================================
 # ABOUT
 # =========================================================
 
-st.header(
-    "ℹ️ About VoiceShield AI"
+st.markdown(
+    "## ℹ️ About VoiceShield AI"
 )
 
 st.write(
-    """
-    VoiceShield AI is an AI-powered voice security prototype
-    designed to detect potentially AI-generated voice impersonation
-    and connect detection with fraud-prevention actions.
+    "VoiceShield AI is an AI-powered voice-cloning "
+    "detection and impersonation-fraud prevention prototype."
+)
 
-    The system uses the Dhwani multilingual deepfake-audio detection
-    model with ONNX Runtime and provides risk scoring, challenging-case
-    handling, explainable security feedback and secondary verification.
+st.write(
+    "The system analyzes voice input, generates a "
+    "0–100 deepfake-risk score and converts that signal "
+    "into a security decision."
+)
 
-    The prototype is designed for defensive cybersecurity use.
-    Detection results should be treated as risk indicators rather than
-    forensic or legal proof.
-    """
+st.write(
+    "The prototype uses the Dhwani multilingual "
+    "deepfake-audio detection model with ONNX Runtime."
+)
+
+st.write(
+    "Detection performance can vary with recording "
+    "conditions, speaker-to-microphone audio, noise, "
+    "compression, accents, unseen cloning methods and "
+    "mixed human-AI recordings."
+)
+
+
+# =========================================================
+# RESPONSIBLE USE
+# =========================================================
+
+st.markdown(
+    "## ⚠️ Responsible Use"
+)
+
+st.caption(
+    "VoiceShield AI is a prototype security-assistance "
+    "system. Results should not be treated as definitive "
+    "forensic proof or the sole basis for high-impact decisions."
 )
 
 
 # =========================================================
 # FOOTER
 # =========================================================
+
+st.markdown("---")
 
 st.caption(
     "🛡️ VoiceShield AI | AI-powered voice cloning detection "
