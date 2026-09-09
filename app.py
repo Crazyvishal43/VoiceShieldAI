@@ -8,6 +8,7 @@ import numpy as np
 import onnxruntime as ort
 import soundfile as sf
 import streamlit as st
+import imageio_ffmpeg
 
 
 # =========================================================
@@ -157,7 +158,7 @@ def convert_audio(uploaded_file):
             f.write(input_bytes)
 
         command = [
-            "ffmpeg",
+            imageio_ffmpeg.get_ffmpeg_exe(),
             "-y",
             "-i",
             input_name,
