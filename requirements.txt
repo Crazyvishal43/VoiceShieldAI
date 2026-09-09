@@ -3,3 +3,4 @@ numpy
 soundfile
 librosa
 onnxruntime
+imageio-ffmpeg
