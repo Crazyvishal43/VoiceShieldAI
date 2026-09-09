@@ -119,8 +119,21 @@ def get_model():
 
     model_file = download_model()
 
+    options = ort.SessionOptions()
+
+    options.graph_optimization_level = (
+        ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    )
+
+    options.intra_op_num_threads = 2
+    options.inter_op_num_threads = 1
+
+    options.enable_mem_pattern = False
+    options.enable_cpu_mem_arena = False
+
     session = ort.InferenceSession(
         model_file,
+        sess_options=options,
         providers=["CPUExecutionProvider"],
     )
 
